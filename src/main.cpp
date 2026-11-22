@@ -2,7 +2,7 @@
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/ProfilePage.hpp>
 #include <Geode/utils/web.hpp>
-#include <Geode/loader/Event.hpp>
+#include <Geode/utils/async.hpp>
 
 using namespace geode::prelude;
 
@@ -13,21 +13,19 @@ void setEclipseEnabled(bool allow) {
     if (!eclipse) return;
 
     if (allow) {
-        if (!eclipse->isEnabled()) {
+        if (!eclipse->isLoaded()) {
             (void)eclipse->enable();
             log::info("Moderator verified: Eclipse Menu enabled.");
         }
     } else {
-        if (eclipse->isEnabled()) {
+        if (eclipse->isLoaded()) {
             (void)eclipse->disable();
             log::info("Non-moderator account: Eclipse Menu disabled.");
         }
     }
 }
 
-// Parse the ":49:<modBadge>:" field from Geometry Dash's getGJUserInfo20 response
 int parseModBadgeFromResponse(std::string const& body) {
-    // GD server responses are key:value pairs separated by ':'
     std::vector<std::string> parts;
     std::stringstream ss(body);
     std::string item;
@@ -46,7 +44,6 @@ int parseModBadgeFromResponse(std::string const& body) {
 void checkModeratorStatusFromServer() {
     auto accManager = GJAccountManager::sharedState();
     if (!accManager || accManager->m_accountID <= 0) {
-        // Not logged in yet -> keep Eclipse disabled
         setEclipseEnabled(false);
         return;
     }
@@ -61,16 +58,18 @@ void checkModeratorStatusFromServer() {
     ));
     req.header("Content-Type", "application/x-www-form-urlencoded");
 
-    req.post(serverUrl).listen([](web::WebResponse* res) {
-        if (res && res->ok()) {
-            std::string text = res->string().unwrapOr("");
-            int badge = parseModBadgeFromResponse(text);
-            setEclipseEnabled(badge > 0);
-        } else {
-            // Fail closed if server check fails
-            setEclipseEnabled(false);
+    async::spawn(
+        req.post(serverUrl),
+        [](web::WebResponse res) {
+            if (res.ok()) {
+                std::string text = res.string().unwrapOr("");
+                int badge = parseModBadgeFromResponse(text);
+                setEclipseEnabled(badge > 0);
+            } else {
+                setEclipseEnabled(false);
+            }
         }
-    });
+    );
 }
 
 class $modify(BootCheckMenuLayer, MenuLayer) {
@@ -79,7 +78,6 @@ class $modify(BootCheckMenuLayer, MenuLayer) {
 
         if (!g_checkedOnBoot) {
             g_checkedOnBoot = true;
-            // Start disabled until server confirms mod status
             setEclipseEnabled(false);
             checkModeratorStatusFromServer();
         }
@@ -97,21 +95,3 @@ class $modify(ModCheckProfilePage, ProfilePage) {
         }
     }
 };
-#include <Geode/modify/LevelSelectLayer.hpp>
-
-void hideNonModButtons(CCNode* layer, bool isMod) {
-    if (!layer || isMod) return;
-
-    // List every button Node ID you want hidden from regular players
-    std::vector<std::string> hiddenIDs = {
-        "geode.loader/geode-button",
-        "km7dev.gdps-switcher/gdps-switcher-button",
-        "user95401.main-levels-editor/edit-button"
-    };
-
-    for (auto const& id : hiddenIDs) {
-        if (auto btn = layer->getChildByIDRecursive(id)) {
-            btn->setVisible(false);
-        }
-    }
-}
